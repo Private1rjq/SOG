@@ -184,24 +184,32 @@ class MsgQLearner:
             loss += entropy_loss + kl_loss
             if self.args.ceb_weight > 0:
                 bs, t, ne, msg_d = msg_dis_mv.mean[:,:-self.args.msg_T+1,:,:].shape
+                # 32, 143, 8, 3
+                # msg_dis_mv.mean ： torch.Size([32, 146, 8, 3])
                 #Don't do softmax on time dimension since the limitation of CUDA memory.
                 da = D.Normal(msg_dis_mv.mean[:,:-self.args.msg_T+1,:,:].permute(1,0,2,3).reshape(t, 1, bs*ne, msg_d),\
                             msg_dis_mv.scale[:,:-self.args.msg_T+1,:,:].permute(1,0,2,3).reshape(t, 1, bs*ne, msg_d))
                 db = D.Normal(msg_dis_inf_mv.mean[:,self.args.msg_T-1:,:,:].permute(1,0,2,3).reshape(t, 1, bs*ne, msg_d), \
                             msg_dis_inf_mv.scale[:,self.args.msg_T-1:,:,:].permute(1,0,2,3).reshape(t, 1, bs*ne, msg_d))
-
-                z=da.sample() #bs*t*ne*msg_d
+                # da: Normal(loc: torch.Size([143, 1, 256, 3]), scale: torch.Size([143, 1, 256, 3])) 
+                # db: Normal(loc: torch.Size([143, 1, 256, 3]), scale: torch.Size([143, 1, 256, 3]))
+                z=da.sample() #bs*t*ne*msg_d ## z.shape: torch.Size([143, 1, 256, 3])
                 if self.args.ceb_kl_weight > 0:
-                    ez = da.log_prob(z) #t*1*(bs*ne)*msg_d
-                    bz = db.log_prob(z) #t*1*(bs*ne)*msg_d
+                    ez = da.log_prob(z) #t*1*(bs*ne)*msg_d # ez.shape : torch.Size([143, 1, 256, 3])
+                    bz = db.log_prob(z) #t*1*(bs*ne)*msg_d # bz.shape : torch.Size([143, 1, 256, 3])
                     ceb_kl_loss = self.args.ceb_kl_weight * (ez-bz).sum(-1).mean()
                     loss += ceb_kl_loss
-                z=z.reshape(t, bs*ne, 1, msg_d)
-                logits = db.log_prob(z) #t*(bs*ne)*(bs*ne)*msg_d
-                logits = logits.sum(-1) #t*(bs*ne)*(bs*ne)
-                ince = D.Categorical(logits=logits) #t*(bs*ne)
-                inds = th.arange(bs*ne, device=batch.device).unsqueeze(0).repeat(t,1) #t*(bs*ne)
-                ceb_loss = -self.args.ceb_weight * ince.log_prob(inds).mean()
+                z=z.reshape(t, bs*ne, 1, msg_d) # z.shape: torch.Size([143, 256, 1, 3])
+                logits = db.log_prob(z) #t*(bs*ne)*(bs*ne)*msg_d ## torch.Size([143, 256, 256, 3])
+                logits = logits.sum(-1) #t*(bs*ne)*(bs*ne)       ## torch.Size([143, 256, 256])
+                ince = D.Categorical(logits=logits) #t*(bs*ne)   ## Categorical(logits: torch.Size([143, 256, 256]))
+                inds = th.arange(bs*ne, device=batch.device).unsqueeze(0).repeat(t,1) #t*(bs*ne) ## torch.Size([143, 256])
+                #                 tensor([[  0,   1,   2,  ..., 253, 254, 255],
+                #                         [  0,   1,   2,  ..., 253, 254, 255],
+                #                         [  0,   1,   2,  ..., 253, 254, 255],
+                #                         ...,
+
+                ceb_loss = -self.args.ceb_weight * ince.log_prob(inds).mean() # ince.log_prob(inds) : torch.Size([143, 256])
                 loss += ceb_loss
         # Optimise
         self.optimiser.zero_grad()
